@@ -79,7 +79,7 @@ jobs:
           make package/xr819/compile V=s
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: xr819-driver
           path: immortalwrt-sdk-*/bin/packages/*/base/kmod-xr819_*.ipk
