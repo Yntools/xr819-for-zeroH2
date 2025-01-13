@@ -1,7 +1,7 @@
 name: Build ImmortalWRT SDK
 
 on:
-  workflow_dispatch:  # Позволяет запускать вручную
+  workflow_dispatch:
 
 jobs:
   build-sdk:
@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-20.04
 
     steps:
+      - name: Show Initial Environment
+        run: |
+          echo "Starting directory: $(pwd)"
+          echo "Directory contents:"
+          ls -la
+
       - name: Setup Environment
         run: |
           sudo apt-get update
@@ -18,36 +24,65 @@ jobs:
           python3-distutils python3-setuptools python3-dev rsync subversion \
           swig time xsltproc zlib1g-dev 
 
-      - name: Clone ImmortalWRT
-        run: |
-          git clone -b openwrt-24.10 --depth=1 https://github.com/immortalwrt/immortalwrt.git sdk
-
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          echo "Available disk space:"
           df -h
 
-      - name: Prepare SDK Build
+      - name: Clone ImmortalWRT
         run: |
-          cd sdk
-          # Конфигурация для Orange Pi Zero (H2+)
+          echo "Cloning ImmortalWRT..."
+          git clone -b openwrt-24.10 --depth=1 https://github.com/immortalwrt/immortalwrt.git immortalwrt
+          echo "Current directory: $(pwd)"
+          echo "Content after clone:"
+          ls -la
+          cd immortalwrt
+          echo "ImmortalWRT directory content:"
+          ls -la
+
+      - name: Update Feeds
+        run: |
+          cd immortalwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          echo "Feeds directory content:"
+          ls -la feeds/
+
+      - name: Configure SDK Build
+        run: |
+          cd immortalwrt
+          echo "Creating .config file..."
           echo 'CONFIG_TARGET_sunxi=y' > .config
           echo 'CONFIG_TARGET_sunxi_cortexa7=y' >> .config
           echo 'CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y' >> .config
+          echo 'CONFIG_SDK=y' >> .config
+          echo "Running defconfig..."
           make defconfig
-          
+          echo "Config file content:"
+          cat .config
+
       - name: Build SDK
         run: |
-          cd sdk
+          cd immortalwrt
+          echo "Starting SDK build..."
           make tools/install -j$(nproc)
           make toolchain/install -j$(nproc)
-          make target/sdk
+          make target/sdk -j$(nproc) V=s
+          echo "Build complete. Checking directories..."
+          echo "Current directory content:"
+          ls -la
+          echo "Bin directory content (if exists):"
+          ls -la bin/ || echo "bin directory not found"
+          echo "Looking for SDK files:"
+          find . -name "*sdk*.tar.xz"
 
       - name: Upload SDK
         uses: actions/upload-artifact@v3
         with:
           name: immortalwrt-sdk
-          path: sdk/bin/targets/sunxi/cortexa7/*sdk*.tar.xz
+          path: immortalwrt/bin/targets/sunxi/cortexa7/*sdk*.tar.xz
+          if-no-files-found: error
