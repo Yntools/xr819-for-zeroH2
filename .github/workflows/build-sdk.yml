@@ -1,0 +1,53 @@
+name: Build ImmortalWRT SDK
+
+on:
+  workflow_dispatch:  # Позволяет запускать вручную
+
+jobs:
+  build-sdk:
+    name: Build SDK
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
+          python3-distutils python3-setuptools python3-dev rsync subversion \
+          swig time xsltproc zlib1g-dev 
+
+      - name: Clone ImmortalWRT
+        run: |
+          git clone -b openwrt-24.10 --depth=1 https://github.com/immortalwrt/immortalwrt.git sdk
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Prepare SDK Build
+        run: |
+          cd sdk
+          # Конфигурация для Orange Pi Zero (H2+)
+          echo 'CONFIG_TARGET_sunxi=y' > .config
+          echo 'CONFIG_TARGET_sunxi_cortexa7=y' >> .config
+          echo 'CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y' >> .config
+          make defconfig
+          
+      - name: Build SDK
+        run: |
+          cd sdk
+          make tools/install -j$(nproc)
+          make toolchain/install -j$(nproc)
+          make target/sdk
+
+      - name: Upload SDK
+        uses: actions/upload-artifact@v3
+        with:
+          name: immortalwrt-sdk
+          path: sdk/bin/targets/sunxi/cortexa7/*sdk*.tar.xz
