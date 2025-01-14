@@ -1,16 +1,16 @@
-name: Build OpenWrt for Orange Pi Zero
+name: Build OpenWrt XR819 Driver
 
 on:
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:
   push:
-    paths-ignore:    # Don't trigger on documentation changes
+    paths-ignore:
       - '*.md'
       - 'docs/**'
       - 'README.md'
     branches:
       - main
-  schedule:          # Run weekly to ensure builds stay fresh
-    - cron: '0 0 * * 0'
+  schedule:
+    - cron: '0 0 * * 0'  # Run weekly on Sunday at midnight UTC
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -41,69 +41,24 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
+        df -h
 
     - name: Clone ImmortalWrt Source
       working-directory: /workdir
       run: |
-        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-    - name: Update Feeds
-      run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Create Custom Configuration
+    - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_SH
-        
-        # Basic configuration for Orange Pi Zero
-        cat >> .config <<EOF
-        CONFIG_TARGET_sunxi=y
-        CONFIG_TARGET_sunxi_cortexa7=y
-        CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y
-        
-        # Wireless configuration
-        CONFIG_PACKAGE_kmod-cfg80211=y
-        CONFIG_PACKAGE_kmod-mac80211=y
-        CONFIG_PACKAGE_MAC80211_MESH=y
-        
-        # XR819 specific configuration
-        CONFIG_PACKAGE_kmod-xradio=y
-        CONFIG_PACKAGE_wireless-regdb=y
-        CONFIG_PACKAGE_wpad-basic=y
-        
-        # Additional wireless tools
-        CONFIG_PACKAGE_wireless-tools=y
-        CONFIG_PACKAGE_hostapd-common=y
-        CONFIG_PACKAGE_iw=y
-        CONFIG_PACKAGE_iwinfo=y
-        
-        # Basic system utilities
-        CONFIG_PACKAGE_htop=y
-        CONFIG_PACKAGE_autocore=y
-        CONFIG_PACKAGE_autocore-arm=y
-        CONFIG_PACKAGE_automount=y
-        CONFIG_PACKAGE_ipv6helper=y
-        
-        # LuCI configuration
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-app-firewall=y
-        CONFIG_PACKAGE_luci-app-opkg=y
-        CONFIG_PACKAGE_luci-theme-bootstrap=y
-        CONFIG_PACKAGE_luci-app-wifi=y
-        
-        # Kernel configuration
-        CONFIG_KERNEL_WLAN_VENDOR_XRADIO=y
-        CONFIG_KERNEL_XRADIO_WLAN=m
-        EOF
-        
         make defconfig
 
     - name: Download Package Sources
@@ -118,7 +73,7 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo -e "$(nproc) thread compilation"
         make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -139,11 +94,12 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload Firmware to Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        name: OpenWrt_XR819_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
+        retention-days: 7
 
     - name: Generate Release Tag
       id: tag
@@ -151,13 +107,14 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "## OpenWrt Firmware for Orange Pi Zero" >> release.txt
+        echo "## OpenWrt XR819 Driver Build" >> release.txt
         echo "- Built at: $(date +"%Y-%m-%d %H:%M:%S")" >> release.txt
         echo "- ImmortalWrt Version: ${{ env.REPO_BRANCH }}" >> release.txt
+        echo "- Device: ${{ env.DEVICE_NAME }}" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload Firmware to Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -165,3 +122,12 @@ jobs:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
+
+    - name: Delete Old Releases
+      uses: dev-drprasad/delete-older-releases@v0.3.2
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
