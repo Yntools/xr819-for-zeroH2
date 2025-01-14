@@ -2,16 +2,7 @@ name: Build OpenWrt XR819 Driver
 
 on:
   workflow_dispatch:
-  push:
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'README.md'
-    branches:
-      - main
-  schedule:
-    - cron: '0 0 * * 0'  # Run weekly on Sunday at midnight UTC
-
+  
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-24.10
