@@ -69,10 +69,21 @@ jobs:
         CONFIG_TARGET_sunxi_cortexa7=y
         CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y
         
-        # WiFi support for XR819
+        # Wireless configuration
+        CONFIG_PACKAGE_kmod-cfg80211=y
+        CONFIG_PACKAGE_kmod-mac80211=y
+        CONFIG_PACKAGE_MAC80211_MESH=y
+        
+        # XR819 specific configuration
         CONFIG_PACKAGE_kmod-xradio=y
         CONFIG_PACKAGE_wireless-regdb=y
         CONFIG_PACKAGE_wpad-basic=y
+        
+        # Additional wireless tools
+        CONFIG_PACKAGE_wireless-tools=y
+        CONFIG_PACKAGE_hostapd-common=y
+        CONFIG_PACKAGE_iw=y
+        CONFIG_PACKAGE_iwinfo=y
         
         # Basic system utilities
         CONFIG_PACKAGE_htop=y
@@ -81,11 +92,16 @@ jobs:
         CONFIG_PACKAGE_automount=y
         CONFIG_PACKAGE_ipv6helper=y
         
-        # Additional features
+        # LuCI configuration
         CONFIG_PACKAGE_luci=y
         CONFIG_PACKAGE_luci-app-firewall=y
         CONFIG_PACKAGE_luci-app-opkg=y
         CONFIG_PACKAGE_luci-theme-bootstrap=y
+        CONFIG_PACKAGE_luci-app-wifi=y
+        
+        # Kernel configuration
+        CONFIG_KERNEL_WLAN_VENDOR_XRADIO=y
+        CONFIG_KERNEL_XRADIO_WLAN=m
         EOF
         
         make defconfig
