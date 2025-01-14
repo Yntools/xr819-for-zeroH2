@@ -2,6 +2,9 @@ name: Build OpenWrt XR819 Driver
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write    # This is required for creating releases
   
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
