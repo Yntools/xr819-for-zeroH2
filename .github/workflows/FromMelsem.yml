@@ -1,4 +1,4 @@
-name: Build from Melsem
+name: Build OpenWrt for Orange Pi Zero H2+
 
 on:
   workflow_dispatch:
@@ -8,17 +8,9 @@ jobs:
     runs-on: ubuntu-20.04
 
     env:
-      OPENWRT_URL: https://github.com/openwrt/openwrt
-      OPENWRT_BRANCH: v23.05.2
-      CYBERWRT_URL: https://github.com/melsem/opi-zero-cyberwrt.git
-      TARGET: sunxi
-      SUBTARGET: cortexa7
-      DEVICE: xunlong_orangepi-zero
+      OPENWRT_VERSION: v23.05.2
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Initialize Environment
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -30,7 +22,15 @@ jobs:
         python3-distutils python3-setuptools rsync subversion swig time \
         xsltproc zlib1g-dev 
 
-    # Кэширование ccache
+    # Кэширование
+    - name: Cache downloads
+      uses: actions/cache@v4
+      with:
+        path: openwrt/dl
+        key: ${{ runner.os }}-openwrt-dl-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-dl-
+
     - name: Cache ccache
       uses: actions/cache@v4
       with:
@@ -39,140 +39,54 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-ccache-
 
-    # Кэширование OpenWrt downloads и tools
-    - name: Cache OpenWrt Downloads and Tools
-      uses: actions/cache@v4
-      with:
-        path: |
-          openwrt/dl
-          openwrt/tools
-          openwrt/staging_dir
-          openwrt/build_dir
-        key: ${{ runner.os }}-openwrt-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-openwrt-
-
     # Настройка ccache
     - name: Setup ccache
       run: |
         mkdir -p ~/.ccache
         echo "max_size = 10G" > ~/.ccache/ccache.conf
         echo "hash_dir = false" >> ~/.ccache/ccache.conf
-        echo "compression = true" >> ~/.ccache/ccache.conf
-        echo "compression_level = 9" >> ~/.ccache/ccache.conf
 
-    - name: Clone repositories
+    # Загрузка и распаковка OpenWrt
+    - name: Download OpenWrt
       run: |
-        git clone -b $OPENWRT_BRANCH $OPENWRT_URL openwrt
-        git clone $CYBERWRT_URL cyberwrt
+        wget https://github.com/openwrt/openwrt/archive/refs/tags/${OPENWRT_VERSION}.tar.gz
+        tar -xvf ${OPENWRT_VERSION}.tar.gz
+        mv openwrt-* openwrt
 
-    - name: Apply CyberWRT patches
+    # Загрузка и применение патчей
+    - name: Download and apply patches
+      working-directory: openwrt
       run: |
-        cd openwrt
-        # Основной патч
-        cp ../cyberwrt/patch/All_openwrt-23.05.2.patch ./
-        patch -p1 < All_openwrt-23.05.2.patch
+        wget https://github.com/melsem/opi-zero-cyberwrt/raw/master/patch/All_openwrt-23.05.2.patch
+        wget https://github.com/melsem/opi-zero-cyberwrt/raw/master/patch/036-.config_openwrt-23.05.2.patch
         
-        # Копируем патчи и конфигурации для SPI и USB
-        mkdir -p target/linux/sunxi/patches-5.15/
-        cp ../cyberwrt/target/linux/sunxi/patches-5.15/* target/linux/sunxi/patches-5.15/
-        cp -r ../cyberwrt/target/linux/sunxi/image/* target/linux/sunxi/image/
-        cp -r ../cyberwrt/target/linux/sunxi/base-files/* target/linux/sunxi/base-files/
-        
-        # Копируем U-Boot патчи
-        cp ../cyberwrt/package/boot/uboot-sunxi/patches/* package/boot/uboot-sunxi/patches/
-
-    - name: Update feeds
-      run: |
-        cd openwrt
         ./scripts/feeds update -a
+        patch -p1 < All_openwrt-23.05.2.patch
+        ./scripts/feeds update opicyberwrt
+        ./scripts/feeds update diskman
         ./scripts/feeds install -a
+        patch -p1 < 036-.config_openwrt-23.05.2.patch
 
-    - name: Configure OpenWrt
-      run: |
-        cd openwrt
-        cat > .config <<'EOF'
-        CONFIG_TARGET_sunxi=y
-        CONFIG_TARGET_sunxi_cortexa7=y
-        CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-zero=y
-        
-        # Включаем ccache
-        CONFIG_CCACHE=y
-        
-        # SPI Flash поддержка
-        CONFIG_SPI_FLASH_ORANGEPI_ZERO_H2_PLUS=y
-        CONFIG_SPI_FLASH_2MB=y
-        
-        # USB и GPIO поддержка
-        CONFIG_PACKAGE_kmod-usb-core=y
-        CONFIG_PACKAGE_kmod-usb2=y
-        CONFIG_PACKAGE_kmod-usb3=y
-        CONFIG_PACKAGE_kmod-usb-ohci=y
-        CONFIG_PACKAGE_kmod-usb-ehci=y
-        CONFIG_PACKAGE_kmod-usb-gadget=y
-        CONFIG_PACKAGE_kmod-usb-net=y
-        CONFIG_PACKAGE_kmod-usb-net-drivers=y
-        CONFIG_PACKAGE_kmod-usb2-pci=y
-        CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-        CONFIG_PACKAGE_wiringOP-Zero=y
-        CONFIG_ORANGEPI_ZERO_H2_PLUS=y
-        
-        # WiFi поддержка
-        CONFIG_PACKAGE_kmod-xradio=y
-        CONFIG_PACKAGE_wireless-tools=y
-        CONFIG_PACKAGE_wpad-basic=y
-        
-        # Основные пакеты
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-app-firewall=y
-        CONFIG_PACKAGE_luci-theme-bootstrap=y
-        CONFIG_PACKAGE_luci-app-opkg=y
-        CONFIG_PACKAGE_triggerhappy=y
-        
-        # Утилиты
-        CONFIG_PACKAGE_htop=y
-        CONFIG_PACKAGE_curl=y
-        CONFIG_PACKAGE_wget=y
-        CONFIG_PACKAGE_ip-full=y
-        CONFIG_PACKAGE_usbutils=y
-        CONFIG_PACKAGE_irqbalance=y
-        
-        # Файловые системы
-        CONFIG_PACKAGE_kmod-fs-ext4=y
-        CONFIG_PACKAGE_kmod-fs-vfat=y
-        
-        # Дополнительные настройки
-        CONFIG_PACKAGE_boot-config=y
-        CONFIG_CLEAN_IPKG=y
-        CONFIG_PACKAGE_v4l-utils=y
-        EOF
-        
-        make defconfig
-
-    - name: Download package sources
-      run: |
-        cd openwrt
-        make download -j$(nproc)
-        find dl -size -1024c -exec rm -f {} \;
-
+    # Сборка
     - name: Build firmware
+      working-directory: openwrt
       run: |
-        cd openwrt
-        echo "::group::Build Output"
+        make defconfig
+        make download -j$(nproc)
         make -j$(nproc) || make -j1 V=s
-        echo "::endgroup::"
         echo "::group::CCache statistics"
         ccache -s
         echo "::endgroup::"
 
+    # Сохранение результатов
     - name: Organize files
       run: |
-        cd openwrt/bin/targets/$TARGET/$SUBTARGET/
+        cd openwrt/bin/targets/*
         echo "Build date: $(date '+%Y-%m-%d %H:%M:%S')" > BUILD_INFO.txt
-        tar czf OpenWrt-OrangePiZero-H2Plus-full.tar.gz *
+        tar czf ../../../OpenWrt-OrangePiZero-H2Plus-full.tar.gz *
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: OpenWrt-OrangePiZero-H2Plus-firmware
-        path: openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/OpenWrt-OrangePiZero-H2Plus-full.tar.gz
+        path: openwrt/OpenWrt-OrangePiZero-H2Plus-full.tar.gz
