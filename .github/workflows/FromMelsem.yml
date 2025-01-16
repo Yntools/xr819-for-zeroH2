@@ -9,11 +9,31 @@ jobs:
 
     env:
       OPENWRT_VERSION: v23.05.2
+      FORCE_UNSAFE_CONFIGURE: 1
+      CLEAN_OLD_PACKAGES: 1
+      DEBIAN_FRONTEND: noninteractive
+      TZ: UTC
 
     steps:
+    - name: Show System Info
+      run: |
+        echo "Build started at: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "Running as user: ${{ github.actor }}"
+        echo "Initial space available:"
+        df -h
+
+    - name: Free Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        sudo apt-get clean
+        echo "Space after cleanup:"
+        df -h
+
     - name: Initialize Environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
@@ -22,7 +42,6 @@ jobs:
         python3-distutils python3-setuptools rsync subversion swig time \
         xsltproc zlib1g-dev 
 
-    # Кэширование
     - name: Cache downloads
       uses: actions/cache@v4
       with:
@@ -30,6 +49,7 @@ jobs:
         key: ${{ runner.os }}-openwrt-dl-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-openwrt-dl-
+        max-size: 5GB
 
     - name: Cache ccache
       uses: actions/cache@v4
@@ -38,22 +58,24 @@ jobs:
         key: ${{ runner.os }}-ccache-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-ccache-
+        max-size: 2GB
 
-    # Настройка ccache
     - name: Setup ccache
       run: |
         mkdir -p ~/.ccache
-        echo "max_size = 10G" > ~/.ccache/ccache.conf
+        echo "max_size = 2G" > ~/.ccache/ccache.conf
         echo "hash_dir = false" >> ~/.ccache/ccache.conf
+        echo "compression = true" >> ~/.ccache/ccache.conf
+        echo "compression_level = 9" >> ~/.ccache/ccache.conf
 
-    # Загрузка и распаковка OpenWrt
     - name: Download OpenWrt
       run: |
         wget https://github.com/openwrt/openwrt/archive/refs/tags/${OPENWRT_VERSION}.tar.gz
         tar -xvf ${OPENWRT_VERSION}.tar.gz
         mv openwrt-* openwrt
+        echo "Space after OpenWrt download:"
+        df -h
 
-    # Загрузка и применение патчей
     - name: Download and apply patches
       working-directory: openwrt
       run: |
@@ -66,23 +88,41 @@ jobs:
         ./scripts/feeds update diskman
         ./scripts/feeds install -a
         patch -p1 < 036-.config_openwrt-23.05.2.patch
+        
+        echo "Space after patches and feeds:"
+        df -h
 
-    # Сборка
     - name: Build firmware
       working-directory: openwrt
       run: |
         make defconfig
+        echo "Starting package downloads..."
         make download -j$(nproc)
-        make -j$(nproc) || make -j1 V=s
-        echo "::group::CCache statistics"
+        echo "Space after downloads:"
+        df -h
+        
+        echo "Starting build..."
+        make -j$(nproc) || (echo "Parallel build failed, cleaning and retrying..." && \
+        rm -rf build_dir/target-*/tmp && \
+        make -j1 V=sc)
+        
+        echo "Cleaning up build directory..."
+        rm -rf build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-sunxi_cortexa7/tmp
+        rm -rf build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-sunxi_cortexa7/linux-5.15.*
+        
+        echo "Final space usage:"
+        df -h
+        
+        echo "Showing ccache statistics:"
         ccache -s
-        echo "::endgroup::"
 
-    # Сохранение результатов
     - name: Organize files
       run: |
         cd openwrt/bin/targets/*
         echo "Build date: $(date '+%Y-%m-%d %H:%M:%S')" > BUILD_INFO.txt
+        echo "Built by: ${{ github.actor }}" >> BUILD_INFO.txt
+        echo "Commit: ${{ github.sha }}" >> BUILD_INFO.txt
+        echo "OpenWrt version: ${OPENWRT_VERSION}" >> BUILD_INFO.txt
         tar czf ../../../OpenWrt-OrangePiZero-H2Plus-full.tar.gz *
 
     - name: Upload artifacts
@@ -90,3 +130,4 @@ jobs:
       with:
         name: OpenWrt-OrangePiZero-H2Plus-firmware
         path: openwrt/OpenWrt-OrangePiZero-H2Plus-full.tar.gz
+        retention-days: 90
