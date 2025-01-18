@@ -2,15 +2,10 @@ name: Build OpenWrt 18.06 for Orange Pi Zero H2+
 
 on:
   workflow_dispatch:
-    inputs:
-      ssh:
-        description: 'SSH connection to Actions'
-        required: false
-        default: 'false'
 
 env:
   REPO_URL: https://github.com/melsem/openwrt-18.06.4
-  REPO_BRANCH: v18.06.4
+  REPO_BRANCH: master  # Изменено на master
   CONFIG_FILE: .config
   DEVICE: sun8i-h2-plus-orangepi-zero
   UPLOAD_FIRMWARE: true
@@ -53,7 +48,7 @@ jobs:
         gettext git java-propose-classpath libelf-dev libncurses5-dev \
         libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
         python3-distutils python3-setuptools rsync subversion swig time \
-        xsltproc zlib1g-dev 
+        xsltproc zlib1g-dev
         sudo timedatectl set-timezone "$TZ"
 
     - name: Clone OpenWrt Source
