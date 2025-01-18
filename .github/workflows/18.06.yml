@@ -2,24 +2,38 @@ name: Build OpenWrt 18.06 for Orange Pi Zero H2+
 
 on:
   workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+
+env:
+  REPO_URL: https://github.com/melsem/openwrt-18.06.4
+  REPO_BRANCH: v18.06.4
+  CONFIG_FILE: .config
+  DEVICE: sun8i-h2-plus-orangepi-zero
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: false
+  TZ: UTC
+  DEBIAN_FRONTEND: noninteractive
 
 jobs:
   build:
     runs-on: ubuntu-20.04
 
-    env:
-      OPENWRT_VERSION: v18.06.4
-      FORCE_UNSAFE_CONFIGURE: 1
-      CLEAN_OLD_PACKAGES: 1
-      DEBIAN_FRONTEND: noninteractive
-      TZ: UTC
-
     steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
     - name: Show System Info
       run: |
         echo "Build started at: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "Running as user: ${{ github.actor }}"
-        echo "Initial space available:"
+        echo "CPU info:"
+        cat /proc/cpuinfo | grep 'model name' | uniq
+        echo "Memory info:"
+        free -h
+        echo "Disk info:"
         df -h
 
     - name: Free Disk Space
@@ -30,7 +44,6 @@ jobs:
         sudo rm -rf "/usr/local/share/boost"
         sudo rm -rf "$AGENT_TOOLSDIRECTORY"
         sudo apt-get clean
-        echo "Space after cleanup:"
         df -h
 
     - name: Initialize Environment
@@ -41,26 +54,32 @@ jobs:
         libncursesw5-dev libssl-dev python python2.7-dev python3 unzip wget \
         python3-distutils python3-setuptools rsync subversion swig time \
         xsltproc zlib1g-dev 
+        sudo timedatectl set-timezone "$TZ"
 
-    - name: Cache downloads
+    - name: Clone OpenWrt Source
+      run: |
+        git clone -b $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        
+    - name: Cache Downloads
       uses: actions/cache@v4
       with:
         path: openwrt/dl
-        key: ${{ runner.os }}-openwrt-dl-${{ github.sha }}
+        key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('openwrt/.config') }}
         restore-keys: |
           ${{ runner.os }}-openwrt-dl-
         max-size: 5GB
 
-    - name: Cache ccache
+    - name: Cache CCACHE
       uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: ${{ runner.os }}-ccache-${{ github.sha }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('openwrt/.config') }}
         restore-keys: |
           ${{ runner.os }}-ccache-
         max-size: 2GB
 
-    - name: Setup ccache
+    - name: Setup CCACHE
       run: |
         mkdir -p ~/.ccache
         echo "max_size = 2G" > ~/.ccache/ccache.conf
@@ -68,66 +87,101 @@ jobs:
         echo "compression = true" >> ~/.ccache/ccache.conf
         echo "compression_level = 9" >> ~/.ccache/ccache.conf
 
-    - name: Download OpenWrt
+    - name: Create Default Config
       run: |
-        git clone -b v18.06.4 --depth 1 https://github.com/melsem/openwrt-18.06.4.git openwrt
         cd openwrt
-        echo "Space after OpenWrt download:"
-        df -h
-
-    - name: Setup feeds and xr819 driver
-      working-directory: openwrt
-      run: |
+        cat > .config <<'EOF'
+        CONFIG_TARGET_sunxi=y
+        CONFIG_TARGET_sunxi_cortexa7=y
+        CONFIG_TARGET_sunxi_cortexa7_DEVICE_sun8i-h2-plus-orangepi-zero=y
+        CONFIG_PACKAGE_kmod-xradio=y
+        CONFIG_PACKAGE_kmod-usb-core=y
+        CONFIG_PACKAGE_kmod-usb-ohci=y
+        CONFIG_PACKAGE_kmod-usb2=y
+        CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+        CONFIG_PACKAGE_kmod-usb-net=y
+        CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+        CONFIG_PACKAGE_kmod-usb-net-rndis=y
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        CONFIG_PACKAGE_wireless-regdb=y
+        CONFIG_PACKAGE_wpad-mini=y
+        CONFIG_PACKAGE_kmod-mac80211=y
+        CONFIG_PACKAGE_kmod-sound-core=y
+        CONFIG_PACKAGE_kmod-sound-soc-sun4i-codec=y
+        CONFIG_PACKAGE_kmod-sound-soc-sun8i-codec=y
+        CONFIG_PACKAGE_kmod-sound-soc-sun8i-codec-analog=y
+        EOF
+        
         # Update feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-        # Download xr819 firmware
+        # Make config
+        make defconfig
+
+    - name: Setup XRadio Driver
+      run: |
+        cd openwrt
         mkdir -p package/kernel/xradio
         wget -O package/kernel/xradio/Makefile https://raw.githubusercontent.com/melsem/openwrt-18.06.4/master/package/kernel/xradio/Makefile
-        
-        echo "CONFIG_PACKAGE_kmod-xradio=y" >> .config
-        echo "CONFIG_PACKAGE_wireless-regdb=y" >> .config
-        
-        make defconfig
-        echo "Space after configuration:"
-        df -h
 
-    - name: Build firmware
-      working-directory: openwrt
+    - name: Download Package Sources
+      id: package
       run: |
-        echo "Starting package downloads..."
+        cd openwrt
         make download -j$(nproc)
-        echo "Space after downloads:"
-        df -h
-        
-        echo "Starting build..."
-        make -j$(nproc) || (echo "Parallel build failed, cleaning and retrying..." && \
-        rm -rf build_dir/target-*/tmp && \
-        make -j1 V=sc)
-        
-        echo "Cleaning up build directory..."
-        rm -rf build_dir/target-arm_*/tmp
-        rm -rf build_dir/target-arm_*/linux-sunxi_cortexa7/tmp
-        
-        echo "Final space usage:"
-        df -h
-        
-        echo "Showing ccache statistics:"
-        ccache -s
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Organize files
+    - name: Build Firmware
+      id: build
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Check Space Usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize Files
+      id: organize
+      if: steps.build.outputs.status == 'success'
       run: |
         cd openwrt/bin/targets/*
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "Build date: $(date '+%Y-%m-%d %H:%M:%S')" > BUILD_INFO.txt
         echo "Built by: ${{ github.actor }}" >> BUILD_INFO.txt
         echo "Commit: ${{ github.sha }}" >> BUILD_INFO.txt
-        echo "OpenWrt version: ${OPENWRT_VERSION}" >> BUILD_INFO.txt
-        tar czf ../../../OpenWrt-18.06.4-OrangePiZero-H2Plus-xr819.tar.gz *
+        echo "OpenWrt version: ${{ env.REPO_BRANCH }}" >> BUILD_INFO.txt
+        echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload artifacts
+    - name: Upload Firmware
       uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt-18.06.4-OrangePiZero-H2Plus-xr819-firmware
-        path: openwrt/OpenWrt-18.06.4-OrangePiZero-H2Plus-xr819.tar.gz
+        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
         retention-days: 90
+
+    - name: Generate Release Tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        touch release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
