@@ -55,7 +55,11 @@ jobs:
       run: |
         git clone -b $REPO_BRANCH $REPO_URL openwrt
         cd openwrt
-        
+
+    - name: Configure Git for Authentication
+      run: |
+        git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
     - name: Cache Downloads
       uses: actions/cache@v4
       with:
