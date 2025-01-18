@@ -5,7 +5,7 @@ on:
 
 env:
   REPO_URL: https://github.com/melsem/openwrt-18.06.4
-  REPO_BRANCH: master  # Изменено на master
+  REPO_BRANCH: master
   CONFIG_FILE: .config
   DEVICE: sun8i-h2-plus-orangepi-zero
   UPLOAD_FIRMWARE: true
