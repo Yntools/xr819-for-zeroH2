@@ -10,6 +10,35 @@ jobs:
     runs-on: ubuntu-20.04
     
     steps:
+    - name: Free up disk space
+      run: |
+        # Список используемого места
+        df -h
+        
+        # Удаление ненужных пакетов и кэшей
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        docker rmi $(docker image ls -aq)
+        sudo apt-get remove -y '^ghc-.*' '^dotnet-.*' '^llvm-.*' '^mozilla-.*' '^google-.*' '^php.*' '^ruby.*'
+        sudo apt-get clean
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+        sudo rm -rf /usr/local/share/boost /usr/local/include/boost /usr/local/lib/libboost*
+        sudo rm -rf /usr/share/gcc-*/python /usr/share/gcc-*/python3*
+        sudo rm -rf /var/lib/docker/overlay2
+        sudo rm -rf /usr/local/lib/node_modules
+        sudo rm -rf /usr/local/share/powershell
+        sudo rm -rf /usr/share/swift
+        
+        # Очистка кэша apt
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        
+        # Показать доступное место после очистки
+        echo "Available space after cleanup:"
+        df -h
+
     - name: Checkout OpenWRT source
       uses: actions/checkout@v3
       with:
@@ -17,39 +46,20 @@ jobs:
         path: openwrt
         fetch-depth: 1
 
-    - name: Free Disk Space
+    - name: Install essential packages
       run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-        sudo -E apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* mysql* php* android*
-        sudo -E apt-get -y autoremove --purge
-        sudo -E apt-get clean
-        df -h
-
-    - name: Update System
-      run: |
-        sudo -E apt-get update
-        sudo -E apt-get -y upgrade
-
-    - name: Install Dependencies
-      run: |
-        sudo -E apt-get -y install \
-          build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python python2.7-dev python3 \
-          unzip wget python3-distutils python3-setuptools python3-dev rsync \
-          subversion swig time xsltproc zlib1g-dev 
+        sudo apt-get update
+        sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+        gettext git java-propose-classpath libelf-dev libncurses5-dev \
+        libncursesw5-dev libssl-dev python python2.7-dev python3 \
+        unzip wget python3-distutils python3-setuptools python3-dev rsync \
+        subversion swig time xsltproc zlib1g-dev 
 
     - name: Update feeds
       working-directory: openwrt
       run: |
-        cp feeds.conf.default feeds.conf.default.backup
         echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-18.06" > feeds.conf.default
         echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-18.06" >> feeds.conf.default
-        echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-18.06" >> feeds.conf.default
-        ./scripts/feeds clean
         ./scripts/feeds update -a
         ./scripts/feeds install -a -f
 
@@ -60,7 +70,6 @@ jobs:
         CONFIG_TARGET_sunxi=y
         CONFIG_TARGET_sunxi_cortexa7=y
         CONFIG_TARGET_sunxi_cortexa7_DEVICE_sun8i-h2-plus-orangepi-zero=y
-        # Essential
         CONFIG_PACKAGE_kmod-xradio=y
         CONFIG_PACKAGE_kmod-usb-core=y
         CONFIG_PACKAGE_kmod-usb-ohci=y
@@ -68,47 +77,34 @@ jobs:
         CONFIG_PACKAGE_hostapd=y
         CONFIG_PACKAGE_wpa-supplicant=y
         CONFIG_PACKAGE_wireless-tools=y
-        # Basic configuration
         CONFIG_USB_SUPPORT=y
         CONFIG_TARGET_ROOTFS_EXT4FS=y
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
         CONFIG_SIGNED_PACKAGES=y
-        # Disable unnecessary packages
+        # Disable unnecessary features
+        CONFIG_BUILD_LOG=n
+        CONFIG_REPRODUCIBLE_DEBUG_INFO=n
+        CONFIG_COLLECT_KERNEL_DEBUG=n
+        # Disable packages we don't need
         CONFIG_PACKAGE_olsrd=n
         CONFIG_PACKAGE_bmx6=n
         CONFIG_PACKAGE_bmx7=n
         CONFIG_PACKAGE_luci-app-olsr=n
-        CONFIG_PACKAGE_luci-app-olsr-services=n
-        CONFIG_PACKAGE_luci-app-olsr-viz=n
-        CONFIG_PACKAGE_luci-mod-freifunk-community=n
         EOF
         
         make defconfig
 
-    - name: Build tools
+    - name: Build tools and toolchain
       working-directory: openwrt
       run: |
-        for tool in flock sed patch-image patch autoconf automake xz tar pkg-config m4 libtool ccache gmp mpfr mpc; do
-          echo "Building $tool..."
-          make tools/$tool/compile -j1 V=s || exit 1
-        done
-
-    - name: Build toolchain
-      working-directory: openwrt
-      run: |
+        make tools/install -j1 V=s
         make toolchain/install -j1 V=s
-
-    - name: Download sources
-      working-directory: openwrt
-      run: |
-        make download -j8 V=s
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
 
     - name: Build firmware
       working-directory: openwrt
       run: |
-        make -j1 V=s
+        make download -j8
+        make -j1 V=s || make -j1 V=sc
 
     - name: Organize files
       if: always()
@@ -123,16 +119,3 @@ jobs:
         name: OpenWRT-OrangePiZero-Firmware
         path: openwrt/artifact/firmware/
         retention-days: 7
-
-    - name: Create Release
-      if: success()
-      uses: softprops/action-gh-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ github.run_number }}
-        name: OpenWrt 18.06.4 build ${{ github.run_number }}
-        files: |
-          openwrt/artifact/firmware/*squashfs-sdcard.img.gz
-          openwrt/artifact/firmware/*ext4-sdcard.img.gz
-          openwrt/artifact/firmware/sha256sums
