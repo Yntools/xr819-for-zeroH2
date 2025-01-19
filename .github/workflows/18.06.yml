@@ -17,6 +17,17 @@ jobs:
         path: openwrt
         fetch-depth: 1
 
+    - name: Cache downloads
+      uses: actions/cache@v3
+      with:
+        path: |
+          openwrt/dl
+          openwrt/feeds
+          openwrt/staging_dir
+        key: ${{ runner.os }}-openwrt-${{ hashFiles('openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-
+
     - name: Free Disk Space
       run: |
         sudo rm -rf /usr/share/dotnet
@@ -31,12 +42,7 @@ jobs:
     - name: Update System and Install Dependencies
       run: |
         sudo -E apt-get update
-        sudo -E apt-get -y install $(curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/openwrt-18.06/tools/install.sh | bash /dev/stdin -x)
-        sudo -E apt-get -y install build-essential clang flex bison g++ gawk \
-        gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-        python3-distutils rsync unzip zlib1g-dev file wget \
-        python2.7-dev python3-setuptools ecj fastjar java-propose-classpath \
-        libelf-dev subversion swig time xsltproc
+        sudo -E apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib g++-multilib p7zip p7zip-full msmtp libssl-dev texinfo libreadline-dev libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint ccache curl wget vim nano python2.7 python3 python3-pip python3-ply haveged lrzsz device-tree-compiler scons antlr3 gperf ecj fastjar re2c xz-utils
 
     - name: Update feeds
       working-directory: openwrt
@@ -45,6 +51,7 @@ jobs:
         echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-18.06" >> feeds.conf.default
         rm -rf feeds/packages/lang/python
         rm -rf feeds/packages/lang/python3
+        ./scripts/feeds clean
         ./scripts/feeds update -a
         ./scripts/feeds install -a -f
 
@@ -90,48 +97,50 @@ jobs:
         # CONFIG_PACKAGE_python3-build is not set
         # CONFIG_PACKAGE_devel is not set
         # CONFIG_KERNEL_KALLSYMS is not set
+        # Disable unnecessary packages
+        # CONFIG_PACKAGE_olsrd is not set
+        # CONFIG_PACKAGE_bmx6 is not set
+        # CONFIG_PACKAGE_bmx7 is not set
         EOF
         
         make defconfig
-        
-    - name: Download package sources
-      working-directory: openwrt
-      run: |
-        make download -j8 V=s || make download -j1 V=s
-        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Build tools
+    - name: Install tools
       working-directory: openwrt
       run: |
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
+        make tools/install -j1 V=sc || make tools/install -j1 V=sc
+
+    - name: Install toolchain
+      working-directory: openwrt
+      run: |
+        make toolchain/install -j1 V=sc || make toolchain/install -j1 V=sc
 
     - name: Build OpenWRT
       working-directory: openwrt
       run: |
-        make -j$(nproc) V=s || make -j1 V=s
+        make -j1 V=sc || make -j1 V=sc
 
     - name: Organize files
-      if: success()
+      if: always()
       working-directory: openwrt
       run: |
         mkdir -p ./artifact/firmware
         mkdir -p ./artifact/package
-        cp -rf ./bin/targets/sunxi/cortexa7/* ./artifact/firmware/
-        cp -rf ./bin/packages/arm_cortex-a7/* ./artifact/package/
+        cp -rf ./bin/targets/sunxi/cortexa7/* ./artifact/firmware/ || true
+        cp -rf ./bin/packages/arm_cortex-a7/* ./artifact/package/ || true
 
     - name: Generate release tag
-      if: success()
       id: tag
+      if: success()
       run: |
         echo "release_tag=v$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         echo "release_name=OpenWrt 18.06.4 $(date +"%Y.%m.%d %H:%M")" >> $GITHUB_OUTPUT
 
     - name: Upload firmware artifact
-      if: success()
+      if: always()
       uses: actions/upload-artifact@v3
       with:
-        name: OpenWRT-firmware-${{ steps.tag.outputs.release_tag }}
+        name: OpenWRT-firmware
         path: openwrt/artifact/firmware/
         retention-days: 7
 
