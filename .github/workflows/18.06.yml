@@ -17,17 +17,6 @@ jobs:
         path: openwrt
         fetch-depth: 1
 
-    - name: Cache downloads
-      uses: actions/cache@v3
-      with:
-        path: |
-          openwrt/dl
-          openwrt/feeds
-          openwrt/staging_dir
-        key: ${{ runner.os }}-openwrt-${{ hashFiles('openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-openwrt-
-
     - name: Free Disk Space
       run: |
         sudo rm -rf /usr/share/dotnet
@@ -39,18 +28,27 @@ jobs:
         sudo -E apt-get clean
         df -h
 
-    - name: Update System and Install Dependencies
+    - name: Update System
       run: |
         sudo -E apt-get update
-        sudo -E apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib g++-multilib p7zip p7zip-full msmtp libssl-dev texinfo libreadline-dev libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint ccache curl wget vim nano python2.7 python3 python3-pip python3-ply haveged lrzsz device-tree-compiler scons antlr3 gperf ecj fastjar re2c xz-utils
+        sudo -E apt-get -y upgrade
+
+    - name: Install Dependencies
+      run: |
+        sudo -E apt-get -y install \
+          build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python python2.7-dev python3 \
+          unzip wget python3-distutils python3-setuptools python3-dev rsync \
+          subversion swig time xsltproc zlib1g-dev 
 
     - name: Update feeds
       working-directory: openwrt
       run: |
+        cp feeds.conf.default feeds.conf.default.backup
         echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-18.06" > feeds.conf.default
         echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-18.06" >> feeds.conf.default
-        rm -rf feeds/packages/lang/python
-        rm -rf feeds/packages/lang/python3
+        echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-18.06" >> feeds.conf.default
         ./scripts/feeds clean
         ./scripts/feeds update -a
         ./scripts/feeds install -a -f
@@ -70,77 +68,59 @@ jobs:
         CONFIG_PACKAGE_hostapd=y
         CONFIG_PACKAGE_wpa-supplicant=y
         CONFIG_PACKAGE_wireless-tools=y
-        CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-        CONFIG_PACKAGE_kmod-sound-core=y
-        CONFIG_PACKAGE_kmod-sound-soc-sun4i-codec=y
-        CONFIG_PACKAGE_kmod-sound-soc-sun8i-codec=y
-        CONFIG_PACKAGE_kmod-sound-soc-sun8i-codec-analog=y
-        CONFIG_PACKAGE_kmod-rtc-sunxi=y
         # Basic configuration
-        CONFIG_AUDIO_SUPPORT=y
-        CONFIG_GPIO_SUPPORT=y
         CONFIG_USB_SUPPORT=y
-        CONFIG_RTC_SUPPORT=y
-        CONFIG_USES_DEVICETREE=y
-        CONFIG_arm=y
-        CONFIG_arm_v7=y
-        CONFIG_ARCH="arm"
-        # File systems
         CONFIG_TARGET_ROOTFS_EXT4FS=y
-        CONFIG_TARGET_EXT4_BLOCKSIZE=4k
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
-        # Package management
         CONFIG_SIGNED_PACKAGES=y
-        # Disable problematic features
-        # CONFIG_PACKAGE_python3-pip is not set
-        # CONFIG_PACKAGE_python3-setuptools is not set
-        # CONFIG_PACKAGE_python3-build is not set
-        # CONFIG_PACKAGE_devel is not set
-        # CONFIG_KERNEL_KALLSYMS is not set
         # Disable unnecessary packages
-        # CONFIG_PACKAGE_olsrd is not set
-        # CONFIG_PACKAGE_bmx6 is not set
-        # CONFIG_PACKAGE_bmx7 is not set
+        CONFIG_PACKAGE_olsrd=n
+        CONFIG_PACKAGE_bmx6=n
+        CONFIG_PACKAGE_bmx7=n
+        CONFIG_PACKAGE_luci-app-olsr=n
+        CONFIG_PACKAGE_luci-app-olsr-services=n
+        CONFIG_PACKAGE_luci-app-olsr-viz=n
+        CONFIG_PACKAGE_luci-mod-freifunk-community=n
         EOF
         
         make defconfig
 
-    - name: Install tools
+    - name: Build tools
       working-directory: openwrt
       run: |
-        make tools/install -j1 V=sc || make tools/install -j1 V=sc
+        for tool in flock sed patch-image patch autoconf automake xz tar pkg-config m4 libtool ccache gmp mpfr mpc; do
+          echo "Building $tool..."
+          make tools/$tool/compile -j1 V=s || exit 1
+        done
 
-    - name: Install toolchain
+    - name: Build toolchain
       working-directory: openwrt
       run: |
-        make toolchain/install -j1 V=sc || make toolchain/install -j1 V=sc
+        make toolchain/install -j1 V=s
 
-    - name: Build OpenWRT
+    - name: Download sources
       working-directory: openwrt
       run: |
-        make -j1 V=sc || make -j1 V=sc
+        make download -j8 V=s
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Build firmware
+      working-directory: openwrt
+      run: |
+        make -j1 V=s
 
     - name: Organize files
       if: always()
       working-directory: openwrt
       run: |
         mkdir -p ./artifact/firmware
-        mkdir -p ./artifact/package
         cp -rf ./bin/targets/sunxi/cortexa7/* ./artifact/firmware/ || true
-        cp -rf ./bin/packages/arm_cortex-a7/* ./artifact/package/ || true
 
-    - name: Generate release tag
-      id: tag
-      if: success()
-      run: |
-        echo "release_tag=v$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "release_name=OpenWrt 18.06.4 $(date +"%Y.%m.%d %H:%M")" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware artifact
-      if: always()
+    - name: Upload firmware
       uses: actions/upload-artifact@v3
       with:
-        name: OpenWRT-firmware
+        name: OpenWRT-OrangePiZero-Firmware
         path: openwrt/artifact/firmware/
         retention-days: 7
 
@@ -150,11 +130,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        name: ${{ steps.tag.outputs.release_name }}
+        tag_name: v${{ github.run_number }}
+        name: OpenWrt 18.06.4 build ${{ github.run_number }}
         files: |
           openwrt/artifact/firmware/*squashfs-sdcard.img.gz
           openwrt/artifact/firmware/*ext4-sdcard.img.gz
           openwrt/artifact/firmware/sha256sums
-        draft: false
-        prerelease: false
