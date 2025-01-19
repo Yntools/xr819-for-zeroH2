@@ -35,9 +35,11 @@ jobs:
     - name: Update feeds
       working-directory: openwrt
       run: |
-        echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-18.06" > feeds.conf.default
-        echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-18.06" >> feeds.conf.default
-        echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-18.06" >> feeds.conf.default
+        cp feeds.conf.default feeds.conf.default.backup
+        echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
+        echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
+        echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
+        ./scripts/feeds clean
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
@@ -73,48 +75,59 @@ jobs:
         CONFIG_TARGET_EXT4_BLOCKSIZE=4k
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
         CONFIG_SIGNED_PACKAGES=y
-        # Убираем проблемные пакеты
-        # CONFIG_PACKAGE_python3-build is not set
+        # Disable problematic packages
+        CONFIG_PACKAGE_devel=n
+        CONFIG_PACKAGE_python3-build=n
         EOF
+        
+        sed -i 's/CONFIG_KERNEL_KALLSYMS=y/CONFIG_KERNEL_KALLSYMS=n/' .config
         make defconfig
 
     - name: Download package sources
       working-directory: openwrt
-      run: make download -j8 || make download -j1 V=s
+      run: |
+        make download -j8 V=s || make download -j1 V=s
+        make tools/install -j$(nproc) || make tools/install -j1 V=s
 
     - name: Build OpenWRT
       working-directory: openwrt
       run: |
-        make -j$(nproc) || make -j1 V=s
+        make -j$(nproc) V=s || make -j1 V=s
 
     - name: Organize files
       working-directory: openwrt
+      if: always()
       run: |
         mkdir -p ./artifact/firmware
         mkdir -p ./artifact/package
-        cp -rf ./bin/targets/sunxi/cortexa7/* ./artifact/firmware/
-        cp -rf ./bin/packages/arm_cortex-a7/* ./artifact/package/
+        cp -rf ./bin/targets/sunxi/cortexa7/* ./artifact/firmware/ || true
+        cp -rf ./bin/packages/arm_cortex-a7/* ./artifact/package/ || true
 
     - name: Upload firmware
       uses: actions/upload-artifact@v3
+      if: always()
       with:
-        name: OpenWRT-OrangePiZero-Firmware
+        name: OpenWRT-OrangePiZero-Firmware-${{ github.run_id }}
         path: openwrt/artifact/firmware/
+        retention-days: 7
 
     - name: Upload packages
       uses: actions/upload-artifact@v3
+      if: always()
       with:
-        name: OpenWRT-OrangePiZero-Packages
+        name: OpenWRT-OrangePiZero-Packages-${{ github.run_id }}
         path: openwrt/artifact/package/
+        retention-days: 7
 
     - name: Generate release tag
       id: tag
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "release_name=OpenWrt 18.06.4 for OPi Zero $(date +"%Y.%m.%d %H:%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ github.run_number }}" >> $GITHUB_OUTPUT
+        echo "release_name=OpenWrt 18.06.4 build ${{ github.run_number }} ($(date +"%Y.%m.%d %H:%M"))" >> $GITHUB_OUTPUT
         touch release.txt
         echo "OpenWrt 18.06.4 for Orange Pi Zero" >> release.txt
         echo "Built on: $(date)" >> release.txt
+        echo "Build number: ${{ github.run_number }}" >> release.txt
         echo "Features:" >> release.txt
         echo "- WiFi support (xradio)" >> release.txt
         echo "- Audio support (sun8i-codec)" >> release.txt
@@ -125,7 +138,7 @@ jobs:
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
-      if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request' && success()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -136,3 +149,5 @@ jobs:
           openwrt/artifact/firmware/*squashfs-sdcard.img.gz
           openwrt/artifact/firmware/*ext4-sdcard.img.gz
           openwrt/artifact/firmware/sha256sums
+        draft: false
+        prerelease: false
